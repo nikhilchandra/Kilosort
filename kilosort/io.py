@@ -18,11 +18,15 @@ from kilosort.preprocessing import get_drift_matrix, fft_highpass
 from kilosort.postprocessing import (
     remove_duplicates, compute_spike_positions, make_pc_features
     )
+import torch.cuda.nvtx as nvtx
 
 _torch_warning = ".*PyTorch does not support non-writable tensors"
 
 
 def find_binary(data_dir: Union[str, os.PathLike]) -> Path:
+
+    nvtx.range_push("io.find_binary")
+
     """Find binary file in `data_dir`."""
 
     data_dir = Path(data_dir)
@@ -45,6 +49,8 @@ def find_binary(data_dir: Union[str, os.PathLike]) -> Path:
         raise ValueError('Multiple binary files in folder with "ap" tag, '
                          'please specify filename')
 
+    nvtx.range_pop()
+
     return filenames[0]
 
 
@@ -54,6 +60,8 @@ def load_probe(probe_path):
     adapted from https://github.com/MouseLand/pykilosort/blob/5712cfd2722a20554fa5077dd8699f68508d1b1a/pykilosort/utils.py#L592
 
     """
+    nvtx.range_push("io.load_probe")
+
     probe = {}
     probe_path = Path(probe_path).resolve()
     required_keys = ['chanMap', 'yc', 'xc', 'n_chan']
@@ -132,10 +140,15 @@ def load_probe(probe_path):
                     f"All probe variables must have the same length."
                 )
 
+    nvtx.range_pop()
+
     return probe
 
   
 def save_probe(probe_dict, filepath):
+
+    nvtx.range_push("io.save_probe")
+
     """Save a probe dictionary to a .json text file.
 
     Parameters
@@ -182,6 +195,8 @@ def save_probe(probe_dict, filepath):
     with open(filepath, 'w') as f:
         f.write(json.dumps(d))
 
+    nvtx.range_pop()
+
 
 def remove_bad_channels(probe, bad_channels):
     """Creates a new probe dictionary with listed channels (data rows) removed.
@@ -200,6 +215,8 @@ def remove_bad_channels(probe, bad_channels):
     probe : dict.
     
     """
+    nvtx.range_push("io.remove_bad_channels")
+
     probe = probe.copy()
 
     bad_idx = np.empty_like(bad_channels, dtype=int)
@@ -214,6 +231,8 @@ def remove_bad_channels(probe, bad_channels):
     probe['kcoords'] = np.delete(probe['kcoords'], bad_idx)
     probe['chanMap'] = np.delete(probe['chanMap'], bad_idx)
     probe['n_chan'] = probe['n_chan'] - bad_idx.size
+
+    nvtx.range_pop()
 
     return probe
 
@@ -352,6 +371,8 @@ def save_to_phy(st, clu, tF, Wall, probe, ops, imin, results_dir=None,
 
     """
 
+    nvtx.range_push("io.save_to_phy")
+
     if results_dir is None:
         results_dir = ops['data_dir'].joinpath('kilosort4')
     results_dir = Path(results_dir)
@@ -483,11 +504,15 @@ def save_to_phy(st, clu, tF, Wall, probe, ops, imin, results_dir=None,
     if phy_cache_path.is_dir():
         shutil.rmtree(phy_cache_path)
 
+    nvtx.range_pop()
+
     return results_dir, similar_templates, is_ref, est_contam_rate, kept_spikes
 
 
 def save_ops(ops, results_dir=None):
     """Save intermediate `ops` dictionary to `results_dir/ops.npy`."""
+
+    nvtx.range_push("io.save_ops")
 
     if results_dir is None:
         results_dir = Path(ops['data_dir']) / 'kilosort4'
@@ -518,8 +543,13 @@ def save_ops(ops, results_dir=None):
 
     np.save(results_dir / 'ops.npy', np.array(ops))
 
+    nvtx.range_pop()
+
 
 def load_ops(ops_path, device=None):
+
+    nvtx.range_push("io.load_ops")
+
     """Load a saved `ops` dictionary and convert some arrays to tensors."""
     if device is None:
         if torch.cuda.is_available():
@@ -536,10 +566,15 @@ def load_ops(ops_path, device=None):
     ops['preprocessing'] = {k: torch.from_numpy(v).to(device)
                             for k,v in ops['preprocessing'].items()}
 
+    nvtx.range_pop()
+
     return ops
 
 
 def bfile_from_ops(ops=None, ops_path=None, filename=None, device=None):
+
+    nvtx.range_push("io.bfile_from_ops")    
+
     if device is None:
         if torch.cuda.is_available():
             device = torch.device('cuda')
@@ -565,6 +600,8 @@ def bfile_from_ops(ops=None, ops_path=None, filename=None, device=None):
         invert_sign=ops['invert_sign'], dtype=ops['data_dtype'], tmin=ops['tmin'],
         tmax=ops['tmax'], shift=ops['shift'], scale=ops['scale']
         )
+    
+    nvtx.range_pop()
 
     return bfile
 
@@ -786,6 +823,10 @@ class BinaryRWFile:
         return bstart, bend
 
     def padded_batch_to_torch(self, ibatch, return_inds=False):
+
+        nvtx.range_push("io.padded_batch_to_torch")
+
+
         """ read batches from file """
         if self.file is None:
             raise ValueError('Binary file has been closed, data not accessible.')
@@ -826,6 +867,9 @@ class BinaryRWFile:
                 X[:] = torch.from_numpy(data).to(self.device).float()
 
         inds = [bstart, bend]
+
+        nvtx.range_pop()
+
         if return_inds:
             return X, inds
         else:
@@ -833,11 +877,16 @@ class BinaryRWFile:
         
 
 def get_total_samples(filename, n_channels, dtype=np.int16):
+
+    nvtx.range_push("io.get_total_samples")
+
     """Count samples in binary file given dtype and number of channels."""
     bytes_per_value = np.dtype(dtype).itemsize
     bytes_per_sample = np.int64(bytes_per_value * n_channels)
     total_bytes = os.path.getsize(filename)
     samples = np.float64(total_bytes / bytes_per_sample)
+
+    nvtx.range_pop()
 
     if samples%1 != 0:
         raise ValueError(
@@ -950,6 +999,9 @@ class BinaryFiltered(BinaryRWFile):
         self.artifact_threshold = artifact_threshold
 
     def filter(self, X, ops=None, ibatch=None):
+
+        nvtx.range_push("io.filter")
+
         # pick only the channels specified in the chanMap
         if self.chan_map is not None:
             X = X[self.chan_map]
@@ -982,6 +1034,9 @@ class BinaryFiltered(BinaryRWFile):
                 X = (M @ self.whiten_mat) @ X
             else:
                 X = self.whiten_mat @ X
+
+        nvtx.range_pop()
+
         return X
 
     def __getitem__(self, *items):
@@ -1003,6 +1058,9 @@ class BinaryFiltered(BinaryRWFile):
 
 
 def save_preprocessing(filename, ops, bfile=None, bfile_path=None):
+
+    nvtx.range_push("io.save_preprocessing")
+
     """Save a preprocessed copy of data, including drift correction.
 
     Parameters
@@ -1101,6 +1159,8 @@ def save_preprocessing(filename, ops, bfile=None, bfile_path=None):
     logger.info('='*40)
     logger.info('Copying finished.')
     logger.info(' ')
+
+    nvtx.range_pop()
 
 
 def spikeinterface_to_binary(recording, filepath, data_name='data.bin',

@@ -3,6 +3,7 @@ import logging
 import numpy as np
 import torch 
 from torch.nn.functional import conv1d, max_pool2d, max_pool1d
+import torch.cuda.nvtx as nvtx
 from tqdm import tqdm
 
 from kilosort import CCG
@@ -12,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 
 def prepare_extract(xc, yc, U, nC, position_limit, device=torch.device('cuda')):
+    
+    nvtx.range_push("template_matching.prepare_extract")
+    
     """Identify desired channels based on distances and template norms.
     
     Parameters
@@ -50,10 +54,15 @@ def prepare_extract(xc, yc, U, nC, position_limit, device=torch.device('cuda')):
     iU = torch.argmax((U**2).sum(1), -1)
     Ucc = U[torch.arange(U.shape[0]),:,iCC[:,iU]]
 
+    nvtx.range_pop()    
+
     return iCC, iCC_mask, iU, Ucc
 
 
 def extract(ops, bfile, U, device=torch.device('cuda'), progress_bar=None):
+
+    nvtx.range_push("template_matching.extract")
+
     nC = ops['settings']['nearest_chans']
     position_limit = ops['settings']['position_limit']
     iCC, iCC_mask, iU, Ucc = prepare_extract(
@@ -122,10 +131,15 @@ def extract(ops, bfile, U, device=torch.device('cuda'), progress_bar=None):
     st = st[isort]
     tF = tF[isort]
 
+    nvtx.range_pop()
+
     return st, tF, ops
 
 
 def align_U(U, ops, device=torch.device('cuda')):
+
+    nvtx.range_push("template_matching.align_U")
+
     Uex = torch.einsum('xyz, zt -> xty', U.to(device), ops['wPCA'])
     X = Uex.reshape(-1, ops['Nchan']).T
     X = conv1d(X.unsqueeze(1), ops['wTEMP'].unsqueeze(1), padding=ops['nt']//2)
@@ -137,19 +151,29 @@ def align_U(U, ops, device=torch.device('cuda')):
         ix = imax==j
         Unew[ix] = torch.roll(Unew[ix], ops['nt']//2 - j, -2)
     Unew = torch.einsum('xty, zt -> xzy', Unew, ops['wPCA'])#.transpose(1,2).cpu()
+
+    nvtx.range_pop()
+
     return Unew, imax
 
 
 def postprocess_templates(Wall, ops, clu, st, device=torch.device('cuda')):
+
+    nvtx.range_push("template_matching.postprocess_templates")
+
     Wall2, _ = align_U(Wall, ops, device=device)
     #Wall3, _= remove_duplicates(ops, Wall2)
     Wall3, _, _ = merging_function(ops, Wall2.transpose(1,2), clu, st[:,0],
                                    0.9, 'mu', device=device)
     Wall3 = Wall3.transpose(1,2).to(device)
+
+    nvtx.range_pop()
+
     return Wall3
 
 
 def prepare_matching(ops, U):
+    nvtx.range_push("template_matching.prepare_matching")
     nt = ops['nt']
     W = ops['wPCA'].contiguous()
     WtW = conv1d(W.reshape(-1, 1,nt), W.reshape(-1, 1 ,nt), padding = nt) 
@@ -161,10 +185,15 @@ def prepare_matching(ops, U):
     UtU = torch.einsum('ikl, jml -> ijkm',  U, U)
     ctc = torch.einsum('ijkm, kml -> ijl', UtU, WtW)
 
+    nvtx.range_pop()
+
     return ctc
 
 
 def run_matching(ops, X, U, ctc, device=torch.device('cuda')):
+
+    nvtx.range_push("template_matching.run_matching")
+
     Th = ops['Th_learned']
     nt = ops['nt']
     max_peels = ops['max_peels']
@@ -238,10 +267,15 @@ def run_matching(ops, X, U, ctc, device=torch.device('cuda')):
     amps = amps[:k]
     th_amps = th_amps[:k]
 
+    nvtx.range_pop()
+
     return  st, amps, th_amps, Xres
 
 
 def merging_function(ops, Wall, clu, st, r_thresh=0.5, mode='ccg', device=torch.device('cuda')):
+    
+    nvtx.range_push("template_matching.merging_function")
+    
     clu2 = clu.copy()
     clu_unq, ns = np.unique(clu2, return_counts = True)
 
@@ -336,5 +370,7 @@ def merging_function(ops, Wall, clu, st, r_thresh=0.5, mode='ccg', device=torch.
         is_ref = is_ref[~is_merged]
     else:
         is_ref = None
+
+    nvtx.range_pop()
 
     return Ww.cpu(), clu2, is_ref

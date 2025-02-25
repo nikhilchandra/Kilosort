@@ -5,6 +5,7 @@ from scipy.sparse import coo_matrix
 import numpy as np
 from scipy.ndimage import gaussian_filter
 import torch
+import torch.cuda.nvtx as nvtx
 
 from kilosort import spikedetect
 
@@ -12,6 +13,8 @@ from kilosort import spikedetect
 def bin_spikes(ops, st):
     """ for each batch, the spikes in that batch are binned to a 2D matrix by amplitude and depth
     """
+
+    nvtx.range_push("datashift.bin_spikes")
 
     # the bin edges are based on min and max of channel y positions
     ymin = ops['yc'].min()
@@ -60,10 +63,14 @@ def bin_spikes(ops, st):
     # center of each vertical sampling bin
     ysamp = dmin + dd * np.arange(dmax) - dd/2
 
+    nvtx.range_pop()
+
     return F, ysamp
 
 
 def align_block2(F, ysamp, ops, device=torch.device('cuda')):
+
+    nvtx.range_push("datashift.align_block2")
 
     Nbatches = ops['Nbatches']
     
@@ -165,22 +172,43 @@ def align_block2(F, ysamp, ops, device=torch.device('cuda')):
         Fg[ib] = torch.roll(Fg[ib], dt[t], 1)
     F0m = Fg.mean(0)
 
+    nvtx.range_pop()
+
     return imin, yblk, F0, F0m
 
 
 def kernelD(x, y, sig = 1):    
+
+    nvtx.range_push("datashift.kernelD")
+
     ds = (x[:,np.newaxis] - y)
     Kn = np.exp(-ds**2 / (2*sig**2))
+
+    nvtx.range_pop()
+
     return Kn
     
 def kernel2D_torch(x, y, sig = 1):    
+
+    nvtx.range_push("datashift.kernel2D_torch")
+
     ds = ((x.unsqueeze(1) - y)**2).sum(-1)
     Kn = torch.exp(-ds / (2*sig**2))
+
+    nvtx.range_pop()
+
+
     return Kn
 
 def kernel2D(x, y, sig = 1):
+
+    nvtx.range_push("datashift.kernel2D")
+
     ds = ((x[:,np.newaxis] - y)**2).sum(-1)
     Kn = np.exp(-ds / (2*sig**2))
+
+    nvtx.range_pop()
+
     return Kn
 
 def run(ops, bfile, device=torch.device('cuda'), progress_bar=None,
@@ -188,6 +216,8 @@ def run(ops, bfile, device=torch.device('cuda'), progress_bar=None,
     """ this step computes a drift correction model
     it returns vertical correction amplitudes for each batch, and for multiple blocks in a batch if nblocks > 1. 
     """
+
+    nvtx.range_push("datashift.run")
     
     if ops['nblocks']<1:
         ops['dshift'] = None 
@@ -221,5 +251,7 @@ def run(ops, bfile, device=torch.device('cuda'), progress_bar=None,
 
     # a small constant is added to the diagonal for stability of the matrix inversion
     ops['iKxx'] = torch.linalg.inv(Kxx + 0.01 * torch.eye(Kxx.shape[0], device=device))
+
+    nvtx.range_pop()
 
     return ops, st

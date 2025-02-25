@@ -5,10 +5,13 @@ import numpy as np
 from torch.fft import fft, ifft, fftshift
 from scipy.interpolate import interp1d
 from tqdm import trange
+import torch.cuda.nvtx as nvtx
 
 def get_drift_matrix(ops, dshift):
     """ for a given dshift drift, computes the linear drift matrix for interpolation
     """
+
+    nvtx.range_push("bench.get_drift_matrix")
 
     # first, interpolate drifts to every channel
     yblk = ops['yblk']
@@ -29,6 +32,8 @@ def get_drift_matrix(ops, dshift):
     # multiply with precomputed kernel matrix of original channels
     M = Kyx @ ops['iKxx']
 
+    nvtx.range_pop()
+
     return M
 
 def load_transform(filename, ibatch, ops, fwav=None, Wrot = None, dshift = None) :
@@ -38,6 +43,9 @@ def load_transform(filename, ibatch, ops, fwav=None, Wrot = None, dshift = None)
      - if Wrot is present,  then the data is whitened
      - if dshift is present, then the data is drift-corrected    
     """
+
+    nvtx.range_push("bench.load_transform")
+
     nt = ops['nt']
     NT = ops['batch_size']
     NTbuff   = ops['NTbuff']
@@ -104,9 +112,14 @@ def load_transform(filename, ibatch, ops, fwav=None, Wrot = None, dshift = None)
         else:
             X = Wrot @ X
 
+    nvtx.range_pop()
+
     return X
 
 def avg_wav(filename, Wsub, nn, ops, ibatch, st_i, clu, Nfilt):
+
+    nvtx.range_push("bench.avg_wav")
+
     nt = ops['nt']
     NT = ops['batch_size']
     if isinstance(ops['wPCA'], np.ndarray):
@@ -128,9 +141,14 @@ def avg_wav(filename, Wsub, nn, ops, ibatch, st_i, clu, Nfilt):
     Wsub += torch.einsum('ijk, lj -> lki', xsub, M)
     nn += M.sum(1)
 
+    nvtx.range_pop()
+
     return Wsub, nn
 
 def clu_ypos(filename, ops, st_i, clu):
+
+    nvtx.range_push("bench.clu_ypos")
+
     Nfilt = clu.max()+1
     Wsub = torch.zeros((Nfilt, ops['nwaves'], ops['Nchan']), device = dev)
     nn   = torch.zeros((Nfilt, ), device = dev)
@@ -145,9 +163,14 @@ def clu_ypos(filename, ops, st_i, clu):
     ichan = np.argmax((Wsub**2).sum(1), -1)
     yclu = ops['yc'][ichan]
 
+    nvtx.range_pop()
+
     return yclu, Wsub
 
 def nmatch(ss0, ss, dt=6):
+
+    nvtx.range_push("bench.nmatch")
+
     i = 0
     j = 0
     n0 = 0
@@ -166,9 +189,15 @@ def nmatch(ss0, ss, dt=6):
             is_matched0[j] = 1
 
         i+= 1
+
+    nvtx.range_pop()
+
     return n0, is_matched, is_matched0
 
 def match_neuron(kk, clu, yclu, st_i, clu0, yclu0, st0_i, n_check=20, dt=6):
+
+    nvtx.range_push("bench.match_neuron")
+
     ss = st_i[clu==kk]
     isort = np.argsort(np.abs(yclu[kk] - yclu0))
     fmax = 0
@@ -198,9 +227,14 @@ def match_neuron(kk, clu, yclu, st_i, clu0, yclu0, st0_i, n_check=20, dt=6):
             fmax = fmax_new
             best_ind = isort[j]
 
+    nvtx.range_pop()
+
     return fmax, miss, fpos, best_ind, matched_all, top_inds
 
 def compare_recordings(st_gt, clu_gt, yclu_gt, st_new, clu_new, yclu_new):
+
+    nvtx.range_push("bench.compare_recordings")
+
     NN = len(yclu_gt)
 
     n_check = 20
@@ -215,9 +249,14 @@ def compare_recordings(st_gt, clu_gt, yclu_gt, st_new, clu_new, yclu_new):
         out = match_neuron(kk, clu_gt, yclu_gt, st_gt, clu_new, yclu_new, st_new, n_check=n_check)
         fmax[kk], fmiss[kk], fpos[kk], best_ind[kk], matched_all[kk], top_inds[kk] = out
 
+    nvtx.range_pop()
+
     return fmax, fmiss, fpos, best_ind, matched_all, top_inds
 
 def load_GT(filename, ops, gt_path, toff = 20, nmax = 600):
+
+    nvtx.range_push("bench.load_GT")
+
     #gt_path = os.path.join(ops['data_folder'] , "sim.imec0.ap_params.npz")
     dd = np.load(gt_path, allow_pickle = True)
 
@@ -235,17 +274,27 @@ def load_GT(filename, ops, gt_path, toff = 20, nmax = 600):
     if np.abs(np.diff(unq_clu) - 1).sum()>1e-5:
         print('error, some ground truth units are missing')
 
+    nvtx.range_pop()
+
     return st_gt, clu_gt, yclu_gt, mu_gt, Wsub, nsp
 
 
 def convert_ks_output(ops, st, clu, toff = 20):
+
+    nvtx.range_push("bench.convert_ks_output")
+
     st = st[:,0].astype('int64')        
     yclu, Wsub    = clu_ypos(ops, st-toff, clu)
+
+    nvtx.range_pop()
 
     return st, clu, yclu, Wsub
 
 
 def load_phy(filename, fpath, ops):
+
+    nvtx.range_push("bench.load_phy")
+
     st_new  = np.load(os.path.join(fpath,  "spike_times.npy")).astype('int64')
     try:
         clu_new = np.load(os.path.join(fpath ,"cluster_times.npy")).astype('int64')
@@ -257,5 +306,7 @@ def load_phy(filename, fpath, ops):
         clu_new = clu_new[:,0]
 
     yclu_new, Wsub = clu_ypos(filename, ops, st_new - 20, clu_new)
+
+    nvtx.range_pop()
 
     return st_new, clu_new, yclu_new, Wsub

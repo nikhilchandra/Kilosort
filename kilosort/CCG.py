@@ -4,9 +4,12 @@ import torch
 from torch.nn.functional import conv1d
 import math 
 from tqdm import trange 
+import torch.cuda.nvtx as nvtx
 
 @njit()
 def compute_CCG(st1, st2, tbin = 1/1000, nbins = 500):
+
+    nvtx.range_push('CCG.compute_CCG')
 
     st1 = np.sort(st1)
     st2 = np.sort(st2)
@@ -33,10 +36,16 @@ def compute_CCG(st1, st2, tbin = 1/1000, nbins = 500):
             ibin = int(np.round((st2[j] - st1[k])/tbin))
             K[ibin+nbins] += 1
         j += 1
+
+    nvtx.range_pop()
+
     return K, T
 
 #@njit()
 def CCG_metrics(st1, st2, K, T, nbins=None, tbin=None):
+
+    nvtx.range_push('CCG.CCG_metrics')
+
     irange1 = np.hstack((np.arange(1,nbins//2), np.arange(3*nbins//2, 2*nbins)))
     irange2 = np.arange(nbins-50, nbins-10)
     irange3 = np.arange(nbins+10, nbins+50)
@@ -71,19 +80,31 @@ def CCG_metrics(st1, st2, K, T, nbins=None, tbin=None):
     R12 = np.min(Ri)
 
     #print('%4.2f, %4.2f, %4.2f'%(R00, Q12, R12))
+
+    nvtx.range_pop()
+
     return Q12, R12, R00
 
 def check_CCG(st1, st2=None, nbins = 500, tbin  = 1/1000, acg_threshold=0.2,
               ccg_threshold=0.25):
+    
+    nvtx.range_push('CCG.check_CCG')
+
     if st2 is None:
         st2 = st1.copy()
     K , T= compute_CCG(st1, st2, nbins = nbins, tbin = tbin)
     Q12, R12, R00 = CCG_metrics(st1, st2, K, T,  nbins = nbins, tbin = tbin)
     is_refractory    = Q12<acg_threshold  and (R12<.2)#  or R00<.25)
     cross_refractory = Q12<ccg_threshold and (R12<.05)# or R00<.25)
+
+    nvtx.range_pop()
+
     return is_refractory, cross_refractory, Q12
 
 def similarity(Wall, W, nt=61):
+
+    nvtx.range_push('CCG.similarity')
+
     WtW = conv1d(W.reshape(-1, 1,nt), W.reshape(-1, 1 ,nt), padding = nt) 
     WtW = torch.flip(WtW, [2,])
     mu = (Wall**2).sum((1,2), keepdims=True)**.5
@@ -91,10 +112,15 @@ def similarity(Wall, W, nt=61):
     UtU = torch.einsum('ilk, jlm -> ijkm',  Wnorm, Wnorm)
     similar_templates = torch.einsum('ijkm, kml -> ijl', UtU.cpu(), WtW.cpu()).numpy()
     similar_templates = similar_templates.max(axis=-1)
+
+    nvtx.range_pop()
+
     return similar_templates
 
 def refract(iclust2, st0, acg_threshold=0.2, ccg_threshold=0.25):
     
+    nvtx.range_push('CCG.refract')
+
     Nfilt = iclust2.max()+1
 
     is_refractory    = np.zeros(Nfilt, )
@@ -109,5 +135,7 @@ def refract(iclust2, st0, acg_threshold=0.2, ccg_threshold=0.25):
             is_refractory[kk], cross_refractory[kk], Q12[kk] = check_CCG(
                 st1, acg_threshold=acg_threshold, ccg_threshold=ccg_threshold
                 )
+
+    nvtx.range_pop()
 
     return is_refractory, Q12

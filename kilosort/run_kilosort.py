@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 
 import numpy as np
 import torch
+import torch.cuda.nvtx as nvtx
 
 import kilosort
 from kilosort import (
@@ -40,6 +41,9 @@ def run_kilosort(settings, probe=None, probe_name=None, filename=None,
                  progress_bar=None, save_extra_vars=False, clear_cache=False,
                  save_preprocessed_copy=False, bad_channels=None,
                  verbose_console=False, verbose_log=False):
+    
+    nvtx.range_push("run_kilosort.run_kilosort")
+
     """Run full spike sorting pipeline on specified data.
     
     Parameters
@@ -271,12 +275,17 @@ def run_kilosort(settings, probe=None, probe_name=None, filename=None,
     finally:
         close_logger()
 
+    nvtx.range_pop()
+
     return ops, st, clu, tF, Wall, similar_templates, \
            is_ref, est_contam_rate, kept_spikes
 
 
 def set_files(settings, filename, probe, probe_name,
               data_dir, results_dir, bad_channels):
+    
+    nvtx.range_push("run_kilosort.set_files")
+
     """Parse file and directory information for data, probe, and results."""
 
     # Check for filename 
@@ -331,10 +340,15 @@ def set_files(settings, filename, probe, probe_name,
     if bad_channels is not None:
         probe = io.remove_bad_channels(probe, bad_channels)
 
+    nvtx.range_pop()
+
     return filename, data_dir, results_dir, probe
 
 
 def setup_logger(results_dir, verbose_console=False):
+
+    nvtx.range_push("run_kilosort.setup_logger")
+
     results_dir = Path(results_dir)
     
     # Get root logger for Kilosort application
@@ -365,6 +379,8 @@ def setup_logger(results_dir, verbose_console=False):
 
         ks_log.addHandler(file)
         ks_log.addHandler(console)
+    
+    nvtx.range_pop()
 
 
 def close_logger():
@@ -375,6 +391,9 @@ def close_logger():
 
 def initialize_ops(settings, probe, data_dtype, do_CAR, invert_sign,
                    device, save_preprocessed_copy) -> dict:
+    
+    nvtx.range_push("run_kilosort.initialize_ops")
+
     """Package settings and probe information into a single `ops` dictionary."""
 
     if settings['nt0min'] is None:
@@ -434,9 +453,14 @@ def initialize_ops(settings, probe, data_dtype, do_CAR, invert_sign,
 
     ops = {**ops, **probe}
 
+    nvtx.range_pop()
+
     return ops
 
 def get_run_parameters(ops) -> list:
+    
+    nvtx.range_push("run_kilosort.get_run_parameters")
+
     """Get `ops` dict values needed by `run_kilosort` subroutines."""
 
     parameters = [
@@ -458,10 +482,15 @@ def get_run_parameters(ops) -> list:
         ops['settings']['scale']
     ]
 
+    nvtx.range_pop()
+
     return parameters
 
 
 def compute_preprocessing(ops, device, tic0=np.nan, file_object=None):
+    
+    nvtx.range_push("run_kilosort.compute_preprocessing")
+
     """Compute preprocessing parameters and save them to `ops`.
 
     Parameters
@@ -527,11 +556,16 @@ def compute_preprocessing(ops, device, tic0=np.nan, file_object=None):
 
     log_performance(logger, 'info', 'Resource usage after preprocessing')
 
+    nvtx.range_pop()
+
     return ops
 
 
 def compute_drift_correction(ops, device, tic0=np.nan, progress_bar=None,
                              file_object=None, clear_cache=False):
+    
+    nvtx.range_push("run_kilosort.compute_drift_correction")
+
     """Compute drift correction parameters and save them to `ops`.
 
     Parameters
@@ -602,11 +636,16 @@ def compute_drift_correction(ops, device, tic0=np.nan, progress_bar=None,
     log_performance(logger, 'info', 'Resource usage after drift correction')
     log_cuda_details(logger)
 
+    nvtx.range_pop()
+
     return ops, bfile, st
 
 
 def detect_spikes(ops, device, bfile, tic0=np.nan, progress_bar=None,
                   clear_cache=False, verbose=False):
+    
+    nvtx.range_push("run_kilosort.detect_spikes")
+
     """Detect spikes via template deconvolution.
     
     Parameters
@@ -690,11 +729,16 @@ def detect_spikes(ops, device, bfile, tic0=np.nan, progress_bar=None,
     log_performance(logger, 'info', 'Resource usage after spike detection')
     log_cuda_details(logger)
 
+    nvtx.range_pop()
+
     return st, tF, Wall, clu
 
 
 def cluster_spikes(st, tF, ops, device, bfile, tic0=np.nan, progress_bar=None,
                    clear_cache=False, verbose=False):
+    
+    nvtx.range_push("run_kilosort.cluster_spikes")
+
     """Cluster spikes using graph-based methods.
     
     Parameters
@@ -761,11 +805,16 @@ def cluster_spikes(st, tF, ops, device, bfile, tic0=np.nan, progress_bar=None,
     log_performance(logger, 'info', 'Resource usage after clustering')
     log_cuda_details(logger)
 
+    nvtx.range_pop()
+
     return clu, Wall
 
 
 def save_sorting(ops, results_dir, st, clu, tF, Wall, imin, tic0=np.nan,
                  save_extra_vars=False, save_preprocessed_copy=False):  
+    
+    nvtx.range_push("run_kilosort.save_sorting")
+
     """Save sorting results, and format them for use with Phy
 
     Parameters
@@ -850,10 +899,15 @@ def save_sorting(ops, results_dir, st, clu, tF, Wall, imin, tic0=np.nan,
     log_performance(logger, 'info', 'Resource usage after saving')
     log_cuda_details(logger)
 
+    nvtx.range_pop()
+
     return ops, similar_templates, is_ref, est_contam_rate, kept_spikes
 
 
 def load_sorting(results_dir, device=None, load_extra_vars=False):
+
+    nvtx.range_push("run_kilosort.load_sorting")
+
     '''Load saved sorting results into memory.
     
     Parameters
@@ -949,5 +1003,7 @@ def load_sorting(results_dir, device=None, load_extra_vars=False):
         full_clu = np.load(results_dir / 'full_clu.npy')
         full_amp = np.load(results_dir / 'full_amp.npy')
         results.extend([tF, Wall, full_st, full_clu, full_amp])
+
+    nvtx.range_pop()
 
     return results

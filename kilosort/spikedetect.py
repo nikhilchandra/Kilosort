@@ -4,6 +4,7 @@ import warnings
 logger = logging.getLogger(__name__)
 
 from torch.nn.functional import max_pool2d, avg_pool2d, conv1d, max_pool1d
+import torch.cuda.nvtx as nvtx
 import numpy as np
 import torch
 from sklearn.cluster import KMeans
@@ -14,22 +15,27 @@ from kilosort.utils import template_path, log_performance
 
 
 def my_max2d(X, dt):
+    nvtx.range_push("spikedetect.my_max2d")
     Xmax = max_pool2d(
         X.unsqueeze(0), [2*dt[0]+1, 2*dt[1]+1],
         stride=[1,1], padding=[dt[0],dt[1]]
         )    
+    nvtx.range_pop()
     return Xmax[0]
 
 def my_sum2d(X, dt):
+    nvtx.range_push("spikedetect.my_sum2d")
     Xsum = avg_pool2d(
         X.unsqueeze(0), [2*dt[0]+1, 2*dt[1]+1],
         stride=[1,1], padding=[dt[0],dt[1]]
         )    
     Xsum *= (2*dt[0]+1) * (2*dt[1]+1)
+    nvtx.range_pop()
     return Xsum[0]
 
 def extract_snippets(X, nt, twav_min, Th_single_ch, loc_range=[4,5],
                      long_range=[6,30], device=torch.device('cuda')):
+    nvtx.range_push("spikedetect.extract_snippets")
     Xabs   = X.abs()
     Xmax   = my_max2d(Xabs, loc_range)
     ispeak = torch.logical_and(Xmax==Xabs, Xabs > Th_single_ch).float()
@@ -43,12 +49,12 @@ def extract_snippets(X, nt, twav_min, Th_single_ch, loc_range=[4,5],
     xy = is_peak_iso.nonzero()
 
     clips = X[xy[:,:1], xy[:,1:2] - twav_min + torch.arange(nt, device=device)]
-
+    nvtx.range_pop()
     return clips
 
 def extract_wPCA_wTEMP(ops, bfile, nt=61, twav_min=20, Th_single_ch=6, nskip=25,
                        device=torch.device('cuda')):
-
+    nvtx.range_push("spikedetect.extract_wPCA_wTEMP")
     clips = np.zeros((500000,nt), 'float32')
     i = 0
     for j in range(0, bfile.n_batches, nskip):
@@ -81,16 +87,19 @@ def extract_wPCA_wTEMP(ops, bfile, nt=61, twav_min=20, Th_single_ch=6, nskip=25,
         wTEMP = torch.from_numpy(model.cluster_centers_).to(device).float()
         wTEMP = wTEMP / (wTEMP**2).sum(1).unsqueeze(1)**.5
         os.environ['OMP_NUM_THREADS'] = nthread
-
+    nvtx.range_pop()
     return wPCA, wTEMP
 
 def get_waves(ops, device=torch.device('cuda')):
+    nvtx.range_push("spikedetect.get_waves")
     dd = np.load(template_path())
     wTEMP = torch.from_numpy(dd['wTEMP']).to(device)
     wPCA = torch.from_numpy(dd['wPCA']).to(device)
+    nvtx.range_pop()
     return wPCA, wTEMP
 
 def template_centers(ops):
+    nvtx.range_push("spikedetect.template_centers")
     shank_idx = ops['kcoords']
     xc = ops['xc']
     yc = ops['yc']
@@ -119,11 +128,12 @@ def template_centers(ops):
 
     ops['yup'] = np.unique(yup)
     ops['xup'] = np.unique(xup)
-
+    nvtx.range_pop()
     return ops
 
 
 def template_match(X, ops, iC, iC2, weigh, device=torch.device('cuda')):
+    nvtx.range_push("spikedetect.template_match")
     nt = ops['nt']
     nt0 = ops['settings']['nt0min']
     nk = ops['settings']['n_templates']
@@ -168,29 +178,33 @@ def template_match(X, ops, iC, iC2, weigh, device=torch.device('cuda')):
     #adist = B[iC[:, xy[:,0]], imax%nk, xy[:,1]] 
     
     #xy[:,1] -= nt
+    nvtx.range_pop()
     return xy, imax, amp, adist
 
 
 def nearest_chans(ys, yc, xs, xc, nC, device=torch.device('cuda')):
+    nvtx.range_push("spikedetect.nearest_chans")
     ds = (ys - yc[:,np.newaxis])**2 + (xs - xc[:,np.newaxis])**2
     iC = np.argsort(ds, 0)[:nC]
     iC = torch.from_numpy(iC).to(device)
     ds = np.sort(ds, 0)[:nC]
-
+    nvtx.range_pop()
     return iC, ds
 
 
 def yweighted(yc, iC, adist, xy, device=torch.device('cuda')):    
-
+    nvtx.range_push("spikedetect.yweighted")
     yy = torch.from_numpy(yc).to(device)[iC]
     cF0 = torch.nn.functional.relu(adist)
     cF0 = cF0/cF0.sum(0)
 
     yct = (cF0 * yy[:,xy[:,0]]).sum(0)
+    nvtx.range_pop()
     return yct
 
 def run(ops, bfile, device=torch.device('cuda'), progress_bar=None,
         clear_cache=False):        
+    nvtx.range_push("spikedetect.run")
     sig = ops['settings']['min_template_size']
     nsizes = ops['settings']['template_sizes'] 
 
@@ -292,4 +306,7 @@ def run(ops, bfile, device=torch.device('cuda'), progress_bar=None,
     ops['iC'] = iC
     ops['iC2'] = iC2
     ops['weigh'] = weigh
+
+    nvtx.range_pop()
+
     return st, tF, ops

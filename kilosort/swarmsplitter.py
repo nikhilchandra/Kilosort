@@ -2,13 +2,17 @@ import numpy as np
 from numba import njit
 import math
 from kilosort.CCG import compute_CCG, CCG_metrics
+import torch.cuda.nvtx as nvtx
 
 def count_elements(kk, iclust, my_clus, xtree):
+    nvtx.range_push("swarmsplitter.count_elements")
     n1 = np.isin(iclust, my_clus[xtree[kk, 0]]).sum()
     n2 = np.isin(iclust, my_clus[xtree[kk, 1]]).sum()
+    nvtx.range_pop()
     return n1, n2
 
 def check_split(Xd, kk, xtree, iclust, my_clus):
+    nvtx.range_push("swarmsplitter.check_split")
     ixy = np.isin(iclust, my_clus[xtree[kk, 2]])
     iclu = iclust[ixy]
     labels = 2*np.isin(iclu, my_clus[xtree[kk, 0]]) - 1
@@ -26,18 +30,22 @@ def check_split(Xd, kk, xtree, iclust, my_clus):
     xproj = Xs @ b
 
     score = bimod_score(xproj)
+    nvtx.range_pop()
     return xproj, score
 
 def clean_tree(valid_merge, xtree, inode):
+    nvtx.range_push("swarmsplitter.clean_tree")
     ix = (xtree[:,2]==inode).nonzero()[0]
     if len(ix)==0:
         return
     valid_merge[ix] = 0
     clean_tree(valid_merge, xtree, xtree[ix, 0])
     clean_tree(valid_merge, xtree, xtree[ix, 1])
+    nvtx.range_pop()
     return
 
 def bimod_score(xproj):
+    nvtx.range_push("swarmsplitter.bimod_score")
     from scipy.ndimage import gaussian_filter1d
     xbin, _ = np.histogram(xproj, np.linspace(-2,2,400))
     xbin = gaussian_filter1d(xbin.astype('float32'), 4)
@@ -48,18 +56,22 @@ def bimod_score(xproj):
     xm2  = np.max(xbin[imin+175:])
 
     score = 1 - np.maximum(xmin/xm1, xmin/xm2)
+    nvtx.range_pop()
     return score
 
 def check_CCG(st1, st2=None, nbins = 500, tbin  = 1/1000):
+    nvtx.range_push("swarmsplitter.check_CCG")
     if st2 is None:
         st2 = st1.copy()
     K , T= compute_CCG(st1, st2, nbins = nbins, tbin = tbin)
     Q12, R12, R00 = CCG_metrics(st1, st2, K, T,  nbins = nbins, tbin = tbin)
     is_refractory    = Q12<.1  and (R12<.2  or R00<.25)
     cross_refractory = Q12<.25 and (R12<.05 or R00<.25)
+    nvtx.range_pop()
     return is_refractory, cross_refractory
 
 def refractoriness(st1, st2):
+    nvtx.range_push("swarmsplitter.refractoriness")
     # compute goodness of st1, st2, and both
 
     is_refractory = check_CCG(st1, st2)[1]
@@ -75,10 +87,13 @@ def refractoriness(st1, st2):
         #if (good_0==1) and (good_1==0) and (good_2==0):
         #    criterion = 1 # don't split
         #    print('good cluster becomes bad')
+    nvtx.range_pop()
     return criterion
 
 def split(Xd, xtree, tstat, iclust, my_clus, verbose = True, meta = None):
     xtree = np.array(xtree)
+
+    nvtx.range_push("swarmsplitter.split")
 
     kk = xtree.shape[0]-1
     nc = xtree.shape[0] + 1
@@ -129,11 +144,15 @@ def split(Xd, xtree, tstat, iclust, my_clus, verbose = True, meta = None):
     tstat = tstat[valid_merge]
     xtree = xtree[valid_merge]
 
+    nvtx.range_pop()
+
     return xtree, tstat
 
 
 def new_clusters(iclust, my_clus, xtree, tstat):
 
+    nvtx.range_push("swarmsplitter.new_clusters")
+    
     if len(xtree)==0:
         return np.zeros_like(iclust)
          
@@ -153,5 +172,6 @@ def new_clusters(iclust, my_clus, xtree, tstat):
         xtree[xtree[:,0] == ind[j], 0] = j
         xtree[xtree[:,1] == ind[j], 1] = j
 
+    nvtx.range_pop()
 
     return iclust1

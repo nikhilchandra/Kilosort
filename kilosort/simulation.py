@@ -2,6 +2,7 @@ import numpy as np
 import os, time 
 import matplotlib.pyplot as plt 
 import torch 
+import torch.cuda.nvtx as nvtx
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d, convolve1d
 from scipy.sparse import csr_matrix 
@@ -14,6 +15,9 @@ from kilosort import io
 
 def preprocess_wfs_sts(filename, y_chan, x_chan, y_chan_up=None, x_chan_up=None,
                        ups=10, device=torch.device('cuda')):
+
+    nvtx.range_push('simulation.preprocess_wfs_sts')
+
     if y_chan_up is None:
         y_chan_up = y_chan
         x_chan_up = x_chan
@@ -124,10 +128,15 @@ def preprocess_wfs_sts(filename, y_chan, x_chan, y_chan_up=None, x_chan_up=None,
     wfs_smoothed /= ((wfs_smoothed**2).sum(axis=(2,3), keepdims=True)**0.5).mean(axis=1, keepdims=True)
     wfs = wfs_smoothed
     
+    nvtx.range_pop()
+
     return wfs, wfs_x, contaminations, sts, cls
 
 
 def generate_background(NT, fs=30000, device=torch.device('cuda')):
+
+    nvtx.range_push('simulation.generate_background')
+
     #NT = 3000000
     nf = np.arange(NT, dtype = 'float32')
     nf = np.minimum(nf, NT - nf)
@@ -151,6 +160,9 @@ def generate_background(NT, fs=30000, device=torch.device('cuda')):
     X *= 0.95 * 0.8
     X = X.reshape(X.shape[0], -1)
     #X = torch.linalg.solve(whiten_mat.cpu(), X.T).T
+
+    nvtx.range_pop()
+
     return X
 
 def generate_spikes(st, cl, wfs, wfs_x, contaminations,
@@ -158,6 +170,9 @@ def generate_spikes(st, cl, wfs, wfs_x, contaminations,
                     batch_size=60000, twav_min=50, drift=True,
                     drift_range=5, drift_seed=0, fast=False, step=False,
                     n_batches_sim=None, ups=10):
+    
+    nvtx.range_push('simulation.generate_spikes')
+
     """ simulate spikes using 
         - random waveforms from wfs with x-pos wfs_x 
         - spike train stats from (st, cl) 
@@ -360,6 +375,8 @@ def generate_spikes(st, cl, wfs, wfs_x, contaminations,
                     else:
                         data_mua[stb, ic0:ic1] += wfi[d][:, iw0:iw1]
 
+    nvtx.range_pop()
+
     return data, data_mua, st_sim, cl_sim, amp_sim, wf_sim, cb_sim, wfid_sim, drift_sim_ups
 
 def create_simulation(filename, st, cl, wfs, wfs_x, contaminations,
@@ -368,6 +385,9 @@ def create_simulation(filename, st, cl, wfs, wfs_x, contaminations,
                       drift_range=5, drift_seed=0, fast=False, step=False,
                       ups=10, whiten_mat = None,
                              ):
+    
+    nvtx.range_push('simulation.create_simulation')
+
     """ simulate neuropixels 3B probe recording """
 
     # simulate spikes
@@ -438,6 +458,8 @@ def create_simulation(filename, st, cl, wfs, wfs_x, contaminations,
              st=st_sim, cl=cl_sim, amp=amp_sim, 
              wfid=wfid_sim, drift=drift_sim_ups)
 
+    nvtx.range_pop()
+
     return st_sim, cl_sim, amp_sim, wf_sim, cb_sim, wfid_sim, drift_sim_ups
 
 # time constants from hybrid
@@ -450,6 +472,8 @@ ntw = 30 + twav_min
 ptw = 30 + nt
 
 def waveforms_from_recording(filename_bg, NT, n_chan_bin, nt, twav_min, chan_map):
+
+    nvtx.range_push("simulation.waveforms_from_recording")
     
     # load kilosort4 output
     data_folder = os.path.split(filename_bg)[0]
@@ -522,11 +546,16 @@ def waveforms_from_recording(filename_bg, NT, n_chan_bin, nt, twav_min, chan_map
     chan0 = xr[:,0]
     wfs = wfs[np.arange(0,wfs.shape[0])[:,np.newaxis],:,xr]
 
+    nvtx.range_pop()
+
     return wfs, cinds, chan0
 
 
 def generate_hybrid_spikes(filename_bg, chan_map, wfs, cinds, chan0, 
                   n_batches_sim=1350, neuron_seed=11, n_sim=100):
+    
+    nvtx.range_push("simulation.generate_hybrid_spikes")
+
     # firing rates in background dataset
     data_folder = os.path.split(filename_bg)[0]
     ks4_folder = os.path.join(data_folder, 'kilosort4/')   
@@ -620,11 +649,15 @@ def generate_hybrid_spikes(filename_bg, chan_map, wfs, cinds, chan0,
     frsim = np.unique(cl_sim, return_counts=True)[1]
     print(f'mean firing rate = {frsim.mean()/(st_sim.max()/fs):.2f}')
 
+    nvtx.range_pop()
+
     return data, (st_sim, cl_sim, ci_sim, wf_sim, cb_sim)
 
 def hybrid_simulation(filename_bg, sim_name, n_batches_sim=1350, 
                         wfs=None, cinds=None, chan0=None):
     
+    nvtx.range_push("simulation.hybrid_simulation")
+
     n_chan_bin = 385
     probe = io.load_probe("/home/carsen/.kilosort/probes/neuropixPhase3B1_kilosortChanMap.prb")
     chan_map = probe["chanMap"]
@@ -681,6 +714,8 @@ def hybrid_simulation(filename_bg, sim_name, n_batches_sim=1350,
                 wfs=wf_sim, cb=cb_sim+8)
 
     print('hybrid ground truth completed')
+
+    nvtx.range_pop()
 
     return data, params
 

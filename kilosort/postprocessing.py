@@ -2,12 +2,15 @@ from numba import njit
 from numba.types import bool_
 import numpy as np
 import torch
+import torch.cuda.nvtx as nvtx
 
 from kilosort.clustering_qr import xy_templates, get_data_cpu
 
 
 @njit("(int64[:], int32[:], int32)")
 def remove_duplicates(spike_times, spike_clusters, dt=15):
+    nvtx.range_push("postprocessing.remove_duplicates")
+
     '''Removes same-cluster spikes that occur within `dt` samples.'''
     keep = np.zeros_like(spike_times, bool_)
     cluster_t0 = {}
@@ -26,11 +29,16 @@ def remove_duplicates(spike_times, spike_clusters, dt=15):
         else:
             # Same spike, toss it out
             continue
+
+    nvtx.range_pop()
     
     return spike_times[keep], spike_clusters[keep], keep
 
 
 def compute_spike_positions(st, tF, ops):
+
+    nvtx.range_push("postprocessing.compute_spike_positions")
+
     '''Get x,y positions of spikes relative to probe.'''
     # Determine channel weightings for nearest channels
     # based on norm of PC features. Channels that are far away have 0 weight,
@@ -51,10 +59,15 @@ def compute_spike_positions(st, tF, ops):
     xs = (xc0 * tmass).sum(1).cpu().numpy()
     ys = (yc0 * tmass).sum(1).cpu().numpy()
 
+    nvtx.range_pop()
+
     return xs, ys
 
 
 def make_pc_features(ops, spike_templates, spike_clusters, tF):
+    
+    nvtx.range_push("postprocessing.make_pc_features")
+
     '''Get PC Features and corresponding indices for export to Phy.
 
     NOTE: This function will update tF in-place!
@@ -118,5 +131,7 @@ def make_pc_features(ops, spike_templates, spike_clusters, tF):
 
     # Swap last 2 dimensions to get ordering Phy expects
     tF = torch.permute(tF, (0, 2, 1))
+
+    nvtx.range_pop()
 
     return tF, feature_ind

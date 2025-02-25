@@ -10,6 +10,7 @@ from scipy.signal import find_peaks
 from scipy.cluster.vq import kmeans
 import faiss
 from tqdm import tqdm 
+import torch.cuda.nvtx as nvtx
 
 from kilosort import hierarchical, swarmsplitter
 from kilosort.utils import log_performance
@@ -20,6 +21,8 @@ logger = logging.getLogger(__name__)
 def neigh_mat(Xd, nskip=10, n_neigh=30):
     # Xd is spikes by PCA features in a local neighborhood
     # finding n_neigh neighbors of each spike to a subset of every nskip spike
+
+    nvtx.range_push('clustering_qr.neigh_mat')
 
     # subsampling the feature matrix 
     Xsub = Xd[::nskip]
@@ -50,11 +53,16 @@ def neigh_mat(Xd, nskip=10, n_neigh=30):
     # self connections are set to 0!
     M[np.arange(0,n_samples,nskip), np.arange(n_nodes)] = 0
 
+    nvtx.range_pop()
+
     return kn, M
 
 
 # TODO: unused?
 def assign_mu(iclust, Xg, cols_mu, tones, nclust = None, lpow = 1):
+
+    nvtx.range_push('clustering_qr.assign_mu')
+
     NN, nfeat = Xg.shape
 
     rows = iclust.unsqueeze(-1).tile((1,nfeat))
@@ -69,10 +77,15 @@ def assign_mu(iclust, Xg, cols_mu, tones, nclust = None, lpow = 1):
     N = N.to_dense()
     mu = C / (1e-6 + N)
 
+    nvtx.range_pop()
+
     return mu, N
 
 
 def assign_iclust(rows_neigh, isub, kn, tones2, nclust, lam, m, ki, kj, device=torch.device('cuda')):
+
+    nvtx.range_push('clustering_qr.assign_iclust')
+
     NN = kn.shape[0]
 
     ij = torch.vstack((rows_neigh.flatten(), isub[kn].flatten()))
@@ -89,10 +102,15 @@ def assign_iclust(rows_neigh, isub, kn, tones2, nclust, lam, m, ki, kj, device=t
     
     iclust = torch.argmax(xN, 1)
 
+    nvtx.range_pop()
+
     return iclust
 
 
 def assign_isub(iclust, kn, tones2, nclust, nsub, lam, m,ki,kj, device=torch.device('cuda')):
+    
+    nvtx.range_push('clustering_qr.assign_isub')
+
     n_neigh = kn.shape[1]
     cols = iclust.unsqueeze(-1).tile((1, n_neigh))
     iis = torch.vstack((kn.flatten(), cols.flatten()))
@@ -108,10 +126,16 @@ def assign_isub(iclust, kn, tones2, nclust, nsub, lam, m,ki,kj, device=torch.dev
         xS = xS - lam / m * (kj.unsqueeze(-1) * kN.to_dense())
 
     isub = torch.argmax(xS, 1)
+
+    nvtx.range_pop()
+
     return isub
 
 
 def Mstats(M, device=torch.device('cuda')):
+
+    nvtx.range_push('clustering_qr.Mstats')
+
     m = M.sum()
     ki = np.array(M.sum(1)).flatten()
     kj = np.array(M.sum(0)).flatten()
@@ -120,12 +144,16 @@ def Mstats(M, device=torch.device('cuda')):
 
     ki = torch.from_numpy(ki).to(device)
     kj = torch.from_numpy(kj).to(device)
+
+    nvtx.range_pop()
     
     return m, ki, kj
 
 
 def cluster(Xd, iclust=None, kn=None, nskip=20, n_neigh=10, nclust=200, seed=1,
             niter=200, lam=0, device=torch.device('cuda'), verbose=False):    
+
+    nvtx.range_push('clustering_qr.cluster')
 
     if kn is None:
         kn, M = neigh_mat(Xd, nskip=nskip, n_neigh=n_neigh)
@@ -177,10 +205,15 @@ def cluster(Xd, iclust=None, kn=None, nskip=20, n_neigh=10, nclust=200, seed=1,
     iclust = iclust.cpu().numpy()
     isub = isub.cpu().numpy()
 
+    nvtx.range_pop()
+
     return iclust, isub, M, iclust_init
 
 
 def kmeans_plusplus(Xg, niter=200, seed=1, device=torch.device('cuda'), verbose=False):
+
+    nvtx.range_push('clustering_qr.kmeans_plusplus')
+
     # Xg is number of spikes by number of features.
     # We are finding cluster centroids and assigning each spike to a centroid.
     vtot = (Xg**2).sum(1)
@@ -276,6 +309,8 @@ def kmeans_plusplus(Xg, niter=200, seed=1, device=torch.device('cuda'), verbose=
     #     vexp = 2 * Xg[ii*nblock:(ii+1)*nblock] @ mu.T - (mu**2).sum(1)
     #     iclust[ii*nblock:(ii+1)*nblock] = torch.argmax(vexp, dim=-1)
 
+    nvtx.range_pop()
+
     return iclust
 
 
@@ -305,6 +340,9 @@ def subsample_idx(n1, n2):
     array([1, 3, 4], dtype=int64)
 
     """
+
+    nvtx.range_push('clustering_qr.subsample_idx')
+
     remove = np.round(np.linspace(0, n1-1, n2)).astype(int)
     idx = np.ones(n1, dtype=bool)
     idx[remove] = False
@@ -312,11 +350,16 @@ def subsample_idx(n1, n2):
     # the full tensor.
     rev_idx = idx.nonzero()[0]
 
+    nvtx.range_pop()
+
     return idx, rev_idx
 
 
 # TODO: unused?
 def compute_score(mu, mu2, N, ccN, lam):
+
+    nvtx.range_push('clustering_qr.compute_score')
+
     mu_pairs  = ((N*mu).unsqueeze(1)  + N*mu)  / (1e-6 + N+N[:,0]).unsqueeze(-1)
     mu2_pairs = ((N*mu2).unsqueeze(1) + N*mu2) / (1e-6 + N+N[:,0]).unsqueeze(-1)
 
@@ -327,21 +370,32 @@ def compute_score(mu, mu2, N, ccN, lam):
     dexp = dexp - torch.diag(torch.diag(dexp))
 
     score = (ccN + ccN.T) - lam * dexp
+
+    nvtx.range_pop()
+
     return score
 
 
 # TODO: unused?
 def run_one(Xd, st0, nskip = 20, lam = 0):
+
+    nvtx.range_push('clustering_qr.run_one')
+
     iclust, iclust0, M = cluster(Xd,nskip = nskip, lam = 0, seed = 5)
     xtree, tstat, my_clus = hierarchical.maketree(M, iclust, iclust0)
     xtree, tstat = swarmsplitter.split(Xd.numpy(), xtree, tstat, iclust,
                                        my_clus, meta = st0)
     iclust1 = swarmsplitter.new_clusters(iclust, my_clus, xtree, tstat)
 
+    nvtx.range_pop()
+
     return iclust1
 
 
 def xy_templates(ops):
+
+    nvtx.range_push('clustering_qr.xy_templates')
+
     iU = ops['iU'].cpu().numpy()
     iC = ops['iCC'][:, ops['iU']]
     #PID = st[:,5].long()
@@ -352,19 +406,29 @@ def xy_templates(ops):
     iU = ops['iU'].cpu().numpy()
     iC = ops['iCC'][:, ops['iU']]    
 
+    nvtx.range_pop()
+
     return xy, iC
 
 
 def xy_up(ops):
+
+    nvtx.range_push('clustering_qr.xy_up')
+
     xcup, ycup = ops['xcup'], ops['ycup']
     xy = np.vstack((xcup, ycup))
     xy = torch.from_numpy(xy)
     iC = ops['iC'] 
 
+    nvtx.range_pop()
+
     return xy, iC
 
 
 def x_centers(ops):
+
+    nvtx.range_push('clustering_qr.x_centers')
+
     k = ops.get('x_centers', None)
     if k is not None:
         # Use this as the input for k-means, either a number of centers
@@ -410,10 +474,15 @@ def x_centers(ops):
     # For example, could raise a warning if this is greater than dminx*2?
     # Most probes should satisfy that criteria.
 
+    nvtx.range_pop()
+
     return centers
 
 
 def y_centers(ops):
+
+    nvtx.range_push('clustering_qr.y_centers')
+
     ycup = ops['ycup']
     dmin = ops['dmin']
     # TODO: May want to add the -dmin/2 in the future to center these, but
@@ -421,10 +490,15 @@ def y_centers(ops):
     #       check it with simulations.
     centers = np.arange(ycup.min()+dmin-1, ycup.max()+dmin+1, 2*dmin)# - dmin/2
 
+    nvtx.range_pop()
+
     return centers
 
 
 def get_nearest_centers(xy, xcent, ycent):
+
+    nvtx.range_push('clustering_qr.get_nearest_centers')
+
     # Get positions of all grouping centers
     ycent_pos, xcent_pos = np.meshgrid(ycent, xcent)
     ycent_pos = torch.from_numpy(ycent_pos.flatten())
@@ -439,11 +513,15 @@ def get_nearest_centers(xy, xcent, ycent):
     # Get flattened index of x-y center that is closest to template
     minimum_distance = torch.min(center_distance, 0).indices
 
+    nvtx.range_pop()
+
     return minimum_distance, xcent_pos, ycent_pos
 
 
 def run(ops, st, tF,  mode = 'template', device=torch.device('cuda'),
         progress_bar=None, clear_cache=False, verbose=False):
+
+    nvtx.range_push('clustering_qr.run')
 
     if mode == 'template':
         xy, iC = xy_templates(ops)
@@ -578,11 +656,16 @@ def run(ops, st, tF,  mode = 'template', device=torch.device('cuda'),
             'Wall is empty after `clustering_qr.run`, cannot continue clustering.'
         )
 
+    nvtx.range_pop()
+
     return clu, Wall
 
 
 def get_data_cpu(ops, xy, iC, PID, tF, ycenter, xcenter, dmin=20, dminx=32,
                  ix=None, merge_dim=True):
+    
+    nvtx.range_push('clustering_qr.get_data_cpu')
+    
     PID =  torch.from_numpy(PID).long()
 
     #iU = ops['iU'].cpu().numpy()
@@ -626,11 +709,16 @@ def get_data_cpu(ops, xy, iC, PID, tF, ycenter, xcenter, dmin=20, dminx=32,
         # Keep channels and features separate
         Xd = dd
 
+    nvtx.range_pop()
+
     return Xd, ch_min, ch_max, igood
 
 
 
 def assign_clust(rows_neigh, iclust, kn, tones2, nclust):    
+
+    nvtx.range_push('clustering_qr.assign_clust')
+
     NN = len(iclust)
 
     ij = torch.vstack((rows_neigh.flatten(), iclust[kn].flatten()))
@@ -639,10 +727,18 @@ def assign_clust(rows_neigh, iclust, kn, tones2, nclust):
     xN = xN.to_dense() 
     iclust = torch.argmax(xN, 1)
 
+    nvtx.range_pop()
+
     return iclust
 
 def assign_iclust0(Xg, mu):
+
+    nvtx.range_push('clustering_qr.assign_iclust0')
+
     vv = Xg @ mu.T
     nm = (mu**2).sum(1)
     iclust = torch.argmax(2*vv-nm, 1)
+
+    nvtx.range_pop()
+
     return iclust
